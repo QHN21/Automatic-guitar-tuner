@@ -15,7 +15,7 @@
 #define C B00111001
 #define D B00010110
 #define E B00110001
-#define F B01110001
+//#define F B01110001
 #define G B00011001
 
 
@@ -33,7 +33,18 @@ double precision = 0.2;
 int treshold = 200;
 
 //PID
-double e;
+double K = 4.0;
+double Tp = 0.2;
+double Ti = 50.0;
+double Td = 0.0;
+
+double u = 0.0;
+double u_past = 0.0;
+
+double r[3] = {0.0, 0.0, 0.0};
+double e[3] = {0.0, 0.0, 0.0};
+//PID END
+
 
 int program_state = 0;
 int adc_iterator = 0;
@@ -47,6 +58,8 @@ int display_counter = 0;
 
 void setup() {
     Serial.begin(9600);
+
+  
  
     sampling_period_us = round(1000000*(1.0/SAMPLING_FREQUENCY));
      cli();//diable interrupts
@@ -57,8 +70,11 @@ void setup() {
   DDRB = DDRB | B11111111;
   PORTB = PORTB | B11111111;
 
-  
-  
+  //PID
+
+  r[0] = K*(1 + Tp/(2*Ti)+Td/Tp);
+  r[1] = K*(Tp/(2*Ti)-2*Td/Tp-1);
+  r[2] = K*Td/Tp;
   //set up continuous sampling of analog pin 0
 
   TCCR0A = 0;// set entire TCCR0A register to 0
@@ -168,9 +184,9 @@ double peakFind(){
 
 double frequencyCheck(double freq){
   if(freq>75.0 && freq <90.0){
-        sevenSegment(E);
-        precision = 0.3;
-       return E2;   
+    sevenSegment(E);
+    precision = 0.3;
+    return E2;   
   }
   if(freq>90.0 && freq <125.0){
     sevenSegment(A);
@@ -199,7 +215,20 @@ double frequencyCheck(double freq){
   }
 }
 
-
+int pid(double e_current){
+  e[2] = e[1];
+  e[1] = e[0];
+  e[0] = e_current;
+  u_past = u;
+  u = u_past + r[0]*e[0] + r[1]*e[1] + r[2]*e[2];
+  if(u< 2.5 && u > 00) u = 2.5;
+  if(u < 0 && u > -2.5) u = -2.5;
+  if(u>30) u = 30;
+  if(u < -30)u = -30;
+  if(abs(e_current)<precision)
+    u = 0;
+  return int(u);
+}
 
 
 void flashLed(double diff){
@@ -248,15 +277,21 @@ void loop() {
     peak = myFFT();
     if(peak != 0.0){
       desired_peak = frequencyCheck(peak);
-      e = desired_peak - peak;
-      flashLed(e);
+      double e_current = desired_peak - peak;
+      
+      flashLed(e_current);
+      Serial.write(pid(e_current));
+      
+      //Serial.println(pid(e_current));
       //Serial.println(peak);
-      if(e>precision)
+      /*if(e>precision)
         Serial.write(50);
       else if(e<-precision)
         Serial.write(-50);
       else
-        Serial.write(0);
+        Serial.write(0);*/
+    }else{
+      Serial.write(0);
     }
     program_state = 0;
     }
@@ -268,7 +303,7 @@ ISR(TIMER0_COMPA_vect) {};
 ISR(ADC_vect) {//when new ADC value ready
   if (program_state == 0) {
     int test = ADC;
-    if (test > 480 || test < 430) {
+    if (test > 440 || test < 380) {
       program_state = 1;
       adc_iterator = 0;
       display_counter = 0;
@@ -276,6 +311,9 @@ ISR(ADC_vect) {//when new ADC value ready
       if(display_counter++ > 500){
         displayClear();
         Serial.write(0);
+        e[0] = 0;
+        e[1] = 0;
+        e[2] = 0;
         display_counter = 0;
       }
     }
