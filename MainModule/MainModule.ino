@@ -1,28 +1,24 @@
-#include "arduinoFFT.h"
- 
+
+#include "SoftwareSerial.h"
 #define SAMPLES 128           //Must be a power of 2
+#define POWER 7
 #define SAMPLING_FREQUENCY 2000 //Hz, must be less than 10000 due to ADC
+
+#define MYPI    3.14159265359
 
 #define E2 82.41
 #define A2 110.60  
-#define D3 146.9         //146.83
-#define G3 199         //196.00
-#define B3 249.6    //246.94
-#define E4 332         //329.63
+#define D3 146.83         //146.83
+#define G3 197.80  //199         //196.00
+#define B3  246.94  //249.6    //246.94
+#define E4   329.63 //  332         //329.63
 
 #define A B01010000
 #define B B00010011
-#define C B00111001
 #define D B00010110
 #define E B00110001
-//#define F B01110001
 #define G B00011001
 
-
-arduinoFFT FFT = arduinoFFT();
- 
-unsigned int sampling_period_us;
-unsigned long microseconds;
  
 double vReal[SAMPLES];
 double vImag[SAMPLES];
@@ -55,14 +51,20 @@ int ledPinCenter = 4;
 int ledPinRight = 3;
 
 int display_counter = 0;
+volatile int time_counter = 0;
+
+// /*Debugging
+SoftwareSerial mySerial(A4, 2);
+//Debugging end*/
 
 void setup() {
-    Serial.begin(9600);
-
+  Serial.begin(9600);
   
- 
-    sampling_period_us = round(1000000*(1.0/SAMPLING_FREQUENCY));
-     cli();//diable interrupts
+  mySerial.begin(9600);
+  
+  
+  cli();//diable interrupts
+  
   DDRD = DDRD | B11111100;
   PORTD = PORTD | B11000000;
 
@@ -111,39 +113,79 @@ void setup() {
 
 double myFFT(){
   /*FFT*/
-    FFT.Windowing(vReal, SAMPLES, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
-    FFT.Compute(vReal, vImag, SAMPLES, FFT_FORWARD);
-    FFT.ComplexToMagnitude(vReal, vImag, SAMPLES);
-    //peak = FFT.MajorPeak(vReal, SAMPLES, SAMPLING_FREQUENCY);
-
+  HammingWindowing();
+  ComputeFFT();
+  ComputeMagnitude();
   return peakFind();
-/*
-  //Peak find  
-  double maxY = 0;
-  uint16_t IndexOfMaxY = 0;
-  for (uint16_t i = 4; i < ((SAMPLES >> 1) + 1); i++) {
-    if ((vReal[i-1] < vReal[i]) && (vReal[i] > vReal[i+1])) {
-      if (vReal[i] > 200) {
-        maxY = vReal[i];
-        IndexOfMaxY = i;
-        break;
-      }
+}
+
+void ComputeFFT(){
+
+  //BIT REVERSE
+  uint16_t j = 0;
+  for (uint16_t i = 0; i < (SAMPLES - 1); i++) {
+    if (i < j) {
+      double tmp;
+      tmp = vReal[i];
+      vReal[i] = vReal[j];
+      vReal[j] = tmp;
+    }
+    uint16_t k = (SAMPLES >> 1);
+    while (k <= j) {
+      j -= k;
+      k >>= 1;
+    }
+    j += k;
+  }
+
+  //FFT
+  
+  uint16_t l2 = 1;
+
+  for (uint8_t l = 0; (l < POWER); l++) {
+    uint16_t l1 = l2;
+    l2 <<= 1;
+    uint16_t a = 0;
+    
+    
+    double u1 = 1.0; //cos
+    double u2 = 0.0;  //sin
+
+    for (j = 0; j < l1; j++) {
+        u1 = cos(-2*MYPI*a/SAMPLES);
+        u2 = sin(-2*MYPI*a/SAMPLES);
+
+        a += 1 << (POWER - l - 1);
+
+       for (uint16_t i = j; i < SAMPLES; i += l2) {
+          uint16_t i1 = i + l1;
+          double t1 = u1 * vReal[i1] - u2 * vImag[i1];
+          double t2 = u1 * vImag[i1] + u2 * vReal[i1];
+          vReal[i1] = vReal[i] - t1;
+          vImag[i1] = vImag[i] - t2;
+          vReal[i] += t1;
+          vImag[i] += t2;
+       }
     }
   }
-
-  if(IndexOfMaxY !=0){
-  double delta = ((- vReal[IndexOfMaxY-1] + vReal[IndexOfMaxY+1]) / (vReal[IndexOfMaxY-1] +  vReal[IndexOfMaxY] + vReal[IndexOfMaxY+1]));
- double interpolatedX = ((IndexOfMaxY + delta)  * SAMPLING_FREQUENCY) / (SAMPLES-1);
-
-  if(IndexOfMaxY==(SAMPLES >> 1)) //To improve calculation on edge values
-    interpolatedX = ((IndexOfMaxY + delta)  * SAMPLING_FREQUENCY) / (SAMPLES);
-  return interpolatedX;
-  }
-  else
-  {
-    return 0.0;
-  }*/
 }
+
+void ComputeMagnitude(){
+  for (uint16_t i = 0; i <(SAMPLES >> 1) + 1; i++) {
+    vReal[i] = sqrt(vReal[i]*vReal[i] + vImag[i]*vImag[i]);
+  }
+}
+
+void HammingWindowing(){
+  double samplesMinusOne = (double(SAMPLES) - 1.0);
+  for (uint16_t i = 0; i < (SAMPLES >> 1); i++) {
+    double ratio = (double(i) / samplesMinusOne);
+    double  weighingFactor = 0.54 - (0.46 * cos(2 * MYPI * ratio));
+    vReal[i] *= weighingFactor;
+    vReal[SAMPLES - (i + 1)] *= weighingFactor;
+  }
+}
+
 
 
 double peakFind(){
@@ -168,12 +210,11 @@ double peakFind(){
   }
 
   if(IndexOfMaxY !=0 && vReal[IndexOfMaxY] > treshold){
-  double delta = ((- vReal[IndexOfMaxY-1] + vReal[IndexOfMaxY+1]) / (vReal[IndexOfMaxY-1] +  vReal[IndexOfMaxY] + vReal[IndexOfMaxY+1]));
- double interpolatedX = ((IndexOfMaxY + delta)  * SAMPLING_FREQUENCY) / (SAMPLES-1);
-
-  if(IndexOfMaxY==(SAMPLES >> 1)) //To improve calculation on edge values
-    interpolatedX = ((IndexOfMaxY + delta)  * SAMPLING_FREQUENCY) / (SAMPLES);
-  return interpolatedX;
+    double delta = ((- vReal[IndexOfMaxY-1] + vReal[IndexOfMaxY+1]) / (vReal[IndexOfMaxY-1] +  vReal[IndexOfMaxY] + vReal[IndexOfMaxY+1]));
+    double interpolatedX = ((IndexOfMaxY + delta)  * SAMPLING_FREQUENCY) / (SAMPLES);
+    if(IndexOfMaxY==(SAMPLES >> 1)) //To improve calculation on edge values
+      interpolatedX = ((IndexOfMaxY + delta)  * SAMPLING_FREQUENCY) / (SAMPLES);
+    return interpolatedX;
   }
   else
   {
@@ -185,48 +226,52 @@ double peakFind(){
 double frequencyCheck(double freq){
   if(freq>75.0 && freq <90.0){
     sevenSegment(E);
-    precision = 0.3;
+    precision = 0.2;
     return E2;   
   }
   if(freq>90.0 && freq <125.0){
     sevenSegment(A);
-    precision = 0.4;
+    precision = 0.2;
     return A2;
   }
   if(freq>125.0 && freq <165.0){
     sevenSegment(D);
-    precision = 0.5;
+    precision = 0.3;
     return D3;
   }
   if(freq>165.0 && freq <215.0){
     sevenSegment(G);
-    precision = 0.7;
+    precision = 0.8;
     return G3;
   }
   if(freq>215.0 && freq <275.0){
     sevenSegment(B);
-    precision = 0.8;
+    precision = 0.5;
     return B3;
   }
   if(freq>275.0){
     sevenSegment(E);
-    precision = 0.9;
+    precision = 0.5;
     return E4;   
   }
 }
 
 int pid(double e_current){
+
+  //PID
   e[2] = e[1];
   e[1] = e[0];
   e[0] = e_current;
   u_past = u;
   u = u_past + r[0]*e[0] + r[1]*e[1] + r[2]*e[2];
-  if(u< 2.5 && u > 00) u = 2.5;
-  if(u < 0 && u > -2.5) u = -2.5;
-  if(u>30) u = 30;
-  if(u < -30)u = -30;
-  if(abs(e_current)<precision)
-    u = 0;
+
+  //Ograniczenia
+  if(u< 10 && u > 0) u = 10;
+  if(u < 0 && u > -10) u = -10;
+  if(u>60) u = 60;
+  if(u < -60)u = -60;
+  if(abs(e_current)<precision) u = 0;
+  
   return int(u);
 }
 
@@ -234,21 +279,21 @@ int pid(double e_current){
 void flashLed(double diff){
   if(abs(diff) < precision){
     digitalWrite(ledPinCenter, 1);
-    analogWrite(ledPinLeft, 0);
-    analogWrite(ledPinRight, 0);
+    digitalWrite(ledPinLeft, 0);
+    digitalWrite(ledPinRight, 0);
     return;
   }
   if(diff > 0){
     digitalWrite(ledPinCenter, 0);
-    analogWrite(ledPinLeft, 255);
-    analogWrite(ledPinRight, 0);
+    digitalWrite(ledPinLeft, 1);
+    digitalWrite(ledPinRight, 0);
     return;
   }
   
   if(diff < 0){
     digitalWrite(ledPinCenter, 0);
-    analogWrite(ledPinLeft, 0);
-    analogWrite(ledPinRight, 255);
+    digitalWrite(ledPinLeft, 0);
+    digitalWrite(ledPinRight, 1);
     return;
   }
 }
@@ -268,8 +313,18 @@ void displayClear(){
     PORTD = PORTD | B11000000;
     PORTB = PORTB | B11111111;
     digitalWrite(ledPinCenter, 0);
-    analogWrite(ledPinLeft, 0);
-    analogWrite(ledPinRight, 0);
+    digitalWrite(ledPinLeft, 0);
+    digitalWrite(ledPinRight, 0);
+}
+
+void pidReset(){
+  Serial.write(0);
+  e[0] = 0;
+  e[1] = 0;
+  e[2] = 0;
+  u = 0.0;
+  u_past = 0.0;
+  return;
 }
  
 void loop() {
@@ -277,23 +332,33 @@ void loop() {
     peak = myFFT();
     if(peak != 0.0){
       desired_peak = frequencyCheck(peak);
+      //double e_current = 1200*log(desired_peak/peak)/log(2)
       double e_current = desired_peak - peak;
-      
+      int u_current = pid(e_current);
       flashLed(e_current);
-      Serial.write(pid(e_current));
+
+      //Debugging
+      char tmp[25];
+      sprintf(tmp, "%u %d %u ", uint16_t(peak*100),  u_current, uint16_t(desired_peak*100));      
+      mySerial.println(tmp);
+      //Debugging end
+
       
-      //Serial.println(pid(e_current));
-      //Serial.println(peak);
-      /*if(e>precision)
-        Serial.write(50);
-      else if(e<-precision)
-        Serial.write(-50);
-      else
-        Serial.write(0);*/
+      while(time_counter < int(Tp*1000)*2);
+      time_counter = 0;
+      Serial.write(u_current); 
+
+      
+      adc_iterator = 0;
+      display_counter = 0;
+ 
+      program_state = 1;
     }else{
-      Serial.write(0);
+      displayClear();
+      pidReset();
+      program_state = 0;
     }
-    program_state = 0;
+  
     }
     
 }
@@ -310,10 +375,7 @@ ISR(ADC_vect) {//when new ADC value ready
     }else{
       if(display_counter++ > 500){
         displayClear();
-        Serial.write(0);
-        e[0] = 0;
-        e[1] = 0;
-        e[2] = 0;
+        pidReset();
         display_counter = 0;
       }
     }
@@ -324,5 +386,8 @@ ISR(ADC_vect) {//when new ADC value ready
       adc_iterator = 0;
       program_state = 2;
     }
+    time_counter++;
+  } else if(program_state == 2 ) {
+    time_counter++;
   }
 }
