@@ -1,17 +1,17 @@
-
+ 
 #include "SoftwareSerial.h"
 #define SAMPLES 128           
 #define POWER 7
 #define SAMPLING_FREQUENCY 2000
 
-#define MYPI    3.14159265359
+#define MYPI    3.141592653589793238462643383279502884197169
 
 #define E2  81.7         // 82.40
 #define A2 110.00        //110.00
 #define D3 145.83        //146.83
-#define G3 197.70        //196.00
-#define B3 247.8         //246.94
-#define E4 329.42        //329.63
+#define G3 197.77        //196.00
+#define B3 247.41         //246.94
+#define E4 329.61        //329.63
 
 #define A B01010000
 #define B B00010011
@@ -23,14 +23,14 @@
 #define LED_PIN_LEFT    5
 #define LED_PIN_CENTER  4
 #define LED_PIN_RIGHT   3
-#define FFT_AMPLITUDE_TRESHOLD    200
+#define FFT_AMPLITUDE_TRESHOLD    100
  
 
 //PID
-double K = 4.0;
+double K = 4;
 double Tp = 0.2;
-double Ti = 50.0;
-double Td = 0.0;
+double Ti = 1000000000;
+double Td = 0;
 
 double u = 0.0;
 double u_past = 0.0;
@@ -47,16 +47,16 @@ double vImag[SAMPLES];
 int program_state = 0;
 int adc_iterator = 0;
 int display_counter = 0;
-volatile int time_counter = 0;
+volatile uint16_t time_counter = 0;
 
 // /*Debugging
-SoftwareSerial mySerial(A4, 2);
+//SoftwareSerial mySerial(A4, 2);
 //Debugging end*/
 
 void setup() {
   Serial.begin(9600);
   
-  mySerial.begin(9600);
+  //mySerial.begin(9600);
   
   //PID
   
@@ -213,57 +213,57 @@ double peakFind(){
 
 
 int pid(double e_current){
-
+  
   //PID
   e[2] = e[1];
   e[1] = e[0];
   e[0] = e_current;
   u_past = u;
   u = u_past + r[0]*e[0] + r[1]*e[1] + r[2]*e[2];
-
+  double u_tmp = u;
   //Ograniczenia
-  if(u < 10 && u >   0) u =  10;
-  if(u < 0  && u > -10) u = -10;
-  if(u >  60) u =  60;
-  if(u < -60) u = -60;
+  if(u_tmp < 10 && u_tmp >   0) u_tmp =  10;
+  if(u_tmp < 0  && u_tmp > -10) u_tmp = -10;
+  if(u_tmp >  60) u_tmp =  60;
+  if(u_tmp < -60) u_tmp = -60;
   if(e_current < 0){
-    if(-e_current < precision) u = 0;
+    if(-e_current < precision) u_tmp = 0;
   }else{
-    if( e_current < precision) u = 0;
+    if( e_current < precision) u_tmp = 0;
   }
-  return int(u);
+  return int(u_tmp);
 }
 
 
 double frequencyCheck(double freq){
-  if(freq>75.0 && freq <90.0){
+  if(freq>50 && freq <90.0){
     sevenSegment(E);
-    precision = 0.3;
+    precision = 0.5;
     return E2;   
   }
   if(freq>90.0 && freq <125.0){
     sevenSegment(A);
-    precision = 0.3;
+    precision = 0.5;
     return A2;
   }
   if(freq>125.0 && freq <165.0){
     sevenSegment(D);
-    precision = 0.4;
+    precision = 0.5;
     return D3;
   }
   if(freq>165.0 && freq <215.0){
     sevenSegment(G);
-    precision = 0.5;
+    precision = 0.6;
     return G3;
   }
   if(freq>215.0 && freq <275.0){
     sevenSegment(B);
-    precision = 0.5;
+    precision = 0.7;
     return B3;
   }
   if(freq>275.0){
     sevenSegment(E);
-    precision = 0.5;
+    precision = 0.8;
     return E4;   
   }
 }
@@ -327,10 +327,14 @@ void displayClear(){
     return;
 }
 
-
+//Debugging
+  int pulse_k = 0;
+  //Debugging end
 
  
 void loop() {
+  
+  
   if (program_state == 2) {
     double peak = myFFT();
     if(peak != 0.0){
@@ -339,25 +343,38 @@ void loop() {
       int u_current = pid(e_current);
       flashLed(e_current);
 
+      /*
       //Debugging
-      char tmp[25];
+      if(pulse_k++<10)
+        u_current = 20;
+      else
+        u_current = 0;
+       */    
+      /*char tmp[25];
       sprintf(tmp, "%u %d %u", uint16_t(peak*100),  u_current, uint16_t(desired_peak*100));      
       mySerial.println(tmp);
-      //Debugging end
-
-      while(time_counter < int(Tp*1000)*2); //waiting untill Tp is reached
+        *///Debugging end
+      
+      while(time_counter <= int(Tp*1000)*2); //waiting untill Tp is reached
       time_counter = 0;
       Serial.write(u_current); 
       adc_iterator = 0;
       display_counter = 0;
       program_state = 1;
     }else{
+      //pulse_k = 0;
       displayClear();
       pidReset();
       Serial.write(0);
       program_state = 0;
     }
   }  
+  /*if(time_counter >= int(Tp*1000)*2){
+    char tmp[25];
+    sprintf(tmp, "%u %d %u", 0, 0, 0);      
+    mySerial.println(tmp);
+    time_counter = 0;
+  }*/
 }
 
 ISR(TIMER0_COMPA_vect) {};
@@ -383,9 +400,7 @@ ISR(ADC_vect) {
     if (adc_iterator == SAMPLES) {
       adc_iterator = 0;
       program_state = 2;
-    }
-    time_counter++;
-  } else if(program_state == 2 ) {
-    time_counter++;
+    }  
   }
+   time_counter++;
 }
