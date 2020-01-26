@@ -1,17 +1,15 @@
- 
-#include "SoftwareSerial.h"
 #define SAMPLES 128           
 #define POWER 7
 #define SAMPLING_FREQUENCY 2000
 
 #define MYPI    3.141592653589793238462643383279502884197169
 
-#define E2  81.7         // 82.40
-#define A2 110.00        //110.00
-#define D3 145.83        //146.83
+#define E6  81.7         // 82.40
+#define A5 110.00        //110.00
+#define D4 145.83        //146.83
 #define G3 197.77        //196.00
-#define B3 247.41         //246.94
-#define E4 329.61        //329.63
+#define B2 247.41        //246.94
+#define E1 329.61        //329.63
 
 #define A B01010000
 #define B B00010011
@@ -41,28 +39,24 @@ double e[3] = {0.0, 0.0, 0.0};
 
 volatile double precision = 0.2;
 
-double vReal[SAMPLES];
-double vImag[SAMPLES];
+double signal_real[SAMPLES];
+double signal_imaginary[SAMPLES];
 
 int program_state = 0;
 int adc_iterator = 0;
 int display_counter = 0;
 volatile uint16_t time_counter = 0;
 
-// /*Debugging
-//SoftwareSerial mySerial(A4, 2);
-//Debugging end*/
-
 void setup() {
   Serial.begin(9600);
-  
-  //mySerial.begin(9600);
   
   //PID
   
   r[0] = K*(1 + Tp/(2*Ti)+Td/Tp);
   r[1] = K*(Tp/(2*Ti)-2*Td/Tp-1);
   r[2] = K*Td/Tp;
+
+  //PID END
   
   cli();  //diable interrupts
 
@@ -118,9 +112,9 @@ void ComputeFFT(){
   for (uint16_t i = 0; i < (SAMPLES - 1); i++) {
     if (i < j) {
       double tmp;
-      tmp = vReal[i];
-      vReal[i] = vReal[j];
-      vReal[j] = tmp;
+      tmp = signal_real[i];
+      signal_real[i] = signal_real[j];
+      signal_real[j] = tmp;
     }
     uint16_t k = (SAMPLES >> 1);
     while (k <= j) {
@@ -137,25 +131,25 @@ void ComputeFFT(){
   for (uint8_t l = 0; (l < POWER); l++) {
     uint16_t l1 = l2;
     l2 <<= 1;
-    uint16_t a = 0;
+    uint16_t kn = 0;
     
-    double u1 = 1.0; //cos
-    double u2 = 0.0;  //sin
+    double cos_val = 1.0; //cos
+    double sin_val = 0.0;  //sin
 
     for (j = 0; j < l1; j++) {
-        u1 = cos(-2*MYPI*a/SAMPLES);
-        u2 = sin(-2*MYPI*a/SAMPLES);
+        cos_val = cos(-2*MYPI*kn/SAMPLES);
+        sin_val = sin(-2*MYPI*kn/SAMPLES);
 
-        a += 1 << (POWER - l - 1);
+        kn += 1 << (POWER - l - 1);
 
        for (uint16_t i = j; i < SAMPLES; i += l2) {
           uint16_t i1 = i + l1;
-          double t1 = u1 * vReal[i1] - u2 * vImag[i1];
-          double t2 = u1 * vImag[i1] + u2 * vReal[i1];
-          vReal[i1] = vReal[i] - t1;
-          vImag[i1] = vImag[i] - t2;
-          vReal[i] += t1;
-          vImag[i] += t2;
+          double t1 = cos_val * signal_real[i1] - sin_val * signal_imaginary[i1];
+          double t2 = cos_val * signal_imaginary[i1] + sin_val * signal_real[i1];
+          signal_real[i1] = signal_real[i] - t1;
+          signal_imaginary[i1] = signal_imaginary[i] - t2;
+          signal_real[i] += t1;
+          signal_imaginary[i] += t2;
        }
     }
   }
@@ -164,7 +158,7 @@ void ComputeFFT(){
 
 void ComputeMagnitude(){
   for (uint16_t i = 0; i <(SAMPLES >> 1) + 1; i++) {
-    vReal[i] = sqrt(vReal[i]*vReal[i] + vImag[i]*vImag[i]);
+    signal_real[i] = sqrt(signal_real[i]*signal_real[i] + signal_imaginary[i]*signal_imaginary[i]);
   }
   return;
 }
@@ -173,8 +167,8 @@ void HammingWindowing(){
   for (uint16_t i = 0; i < (SAMPLES >> 1); i++) {
     double ratio = (double(i) / (double(SAMPLES) - 1.0));
     double  weighingFactor = 0.54 - (0.46 * cos(2 * MYPI * ratio));
-    vReal[i] *= weighingFactor;
-    vReal[SAMPLES - (i + 1)] *= weighingFactor;
+    signal_real[i] *= weighingFactor;
+    signal_real[SAMPLES - (i + 1)] *= weighingFactor;
   }
   return;
 }
@@ -182,28 +176,29 @@ void HammingWindowing(){
 
 
 double peakFind(){
+  //Harmonic Product Spectrum Algorithm
   for(int i = 0; i< ((SAMPLES >> 1) + 1); i++)
-    vImag[i] = vReal[i];
+    signal_imaginary[i] = signal_real[i];
   for(int i = 0; i*2< ((SAMPLES >> 1) + 1); i++)
-    vImag[i] = vImag[i] * vReal[i*2];
+    signal_imaginary[i] = signal_imaginary[i] * signal_real[i*2];
   for(int i = 0; i*3< ((SAMPLES >> 1) + 1); i++)
-    vImag[i] = vImag[i] * vReal[i*3];
+    signal_imaginary[i] = signal_imaginary[i] * signal_real[i*3];
 
    //Peak find  
   double maxY = 0;
   uint16_t IndexOfMaxY = 0;
   for (uint16_t i = 4; i < ((SAMPLES >> 1) + 1); i++) {
-    if ((vImag[i-1] < vImag[i]) && (vImag[i] > vImag[i+1])) {
-      if (vImag[i] > maxY) {
-        maxY = vImag[i];
+    if ((signal_imaginary[i-1] < signal_imaginary[i]) && (signal_imaginary[i] > signal_imaginary[i+1])) {
+      if (signal_imaginary[i] > maxY) {
+        maxY = signal_imaginary[i];
         IndexOfMaxY = i;
       }
     }
   }
 
-  //Interpolation
-  if(IndexOfMaxY !=0 && vReal[IndexOfMaxY] > FFT_AMPLITUDE_TRESHOLD){
-    double delta = ((- vReal[IndexOfMaxY-1] + vReal[IndexOfMaxY+1]) / (vReal[IndexOfMaxY-1] +  vReal[IndexOfMaxY] + vReal[IndexOfMaxY+1]));
+  //Barycentric Interpolation
+  if(IndexOfMaxY !=0 && signal_real[IndexOfMaxY] > FFT_AMPLITUDE_TRESHOLD){
+    double delta = ((- signal_real[IndexOfMaxY-1] + signal_real[IndexOfMaxY+1]) / (signal_real[IndexOfMaxY-1] +  signal_real[IndexOfMaxY] + signal_real[IndexOfMaxY+1]));
     double interpolatedX = ((IndexOfMaxY + delta)  * SAMPLING_FREQUENCY) / (SAMPLES);
     return interpolatedX;
   }else{
@@ -212,7 +207,7 @@ double peakFind(){
 }
 
 
-int pid(double e_current){
+int pid(double e_current){ 
   
   //PID
   e[2] = e[1];
@@ -221,7 +216,8 @@ int pid(double e_current){
   u_past = u;
   u = u_past + r[0]*e[0] + r[1]*e[1] + r[2]*e[2];
   double u_tmp = u;
-  //Ograniczenia
+  
+  //Constraints
   if(u_tmp < 10 && u_tmp >   0) u_tmp =  10;
   if(u_tmp < 0  && u_tmp > -10) u_tmp = -10;
   if(u_tmp >  60) u_tmp =  60;
@@ -239,17 +235,17 @@ double frequencyCheck(double freq){
   if(freq>50 && freq <90.0){
     sevenSegment(E);
     precision = 0.5;
-    return E2;   
+    return E6;   
   }
   if(freq>90.0 && freq <125.0){
     sevenSegment(A);
     precision = 0.5;
-    return A2;
+    return A5;
   }
   if(freq>125.0 && freq <165.0){
     sevenSegment(D);
     precision = 0.5;
-    return D3;
+    return D4;
   }
   if(freq>165.0 && freq <215.0){
     sevenSegment(G);
@@ -259,12 +255,12 @@ double frequencyCheck(double freq){
   if(freq>215.0 && freq <275.0){
     sevenSegment(B);
     precision = 0.7;
-    return B3;
+    return B2;
   }
   if(freq>275.0){
     sevenSegment(E);
     precision = 0.8;
-    return E4;   
+    return E1;   
   }
 }
 
@@ -326,35 +322,15 @@ void displayClear(){
     digitalWrite(LED_PIN_RIGHT, 0);
     return;
 }
-
-//Debugging
-  int pulse_k = 0;
-  //Debugging end
-
  
 void loop() {
-  
-  
   if (program_state == 2) {
     double peak = myFFT();
     if(peak != 0.0){
       double desired_peak = frequencyCheck(peak);
       double e_current = desired_peak - peak;
       int u_current = pid(e_current);
-      flashLed(e_current);
-
-      /*
-      //Debugging
-      if(pulse_k++<10)
-        u_current = 20;
-      else
-        u_current = 0;
-       */    
-      /*char tmp[25];
-      sprintf(tmp, "%u %d %u", uint16_t(peak*100),  u_current, uint16_t(desired_peak*100));      
-      mySerial.println(tmp);
-        *///Debugging end
-      
+      flashLed(e_current);    
       while(time_counter <= int(Tp*1000)*2); //waiting untill Tp is reached
       time_counter = 0;
       Serial.write(u_current); 
@@ -369,12 +345,6 @@ void loop() {
       program_state = 0;
     }
   }  
-  /*if(time_counter >= int(Tp*1000)*2){
-    char tmp[25];
-    sprintf(tmp, "%u %d %u", 0, 0, 0);      
-    mySerial.println(tmp);
-    time_counter = 0;
-  }*/
 }
 
 ISR(TIMER0_COMPA_vect) {};
@@ -395,8 +365,8 @@ ISR(ADC_vect) {
       }
     }
   } else if (program_state == 1) {
-     vReal[adc_iterator] = ADC;
-     vImag[adc_iterator++] = 0;
+     signal_real[adc_iterator] = ADC;
+     signal_imaginary[adc_iterator++] = 0;
     if (adc_iterator == SAMPLES) {
       adc_iterator = 0;
       program_state = 2;
